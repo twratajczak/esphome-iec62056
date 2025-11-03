@@ -51,7 +51,11 @@ void IEC62056Component::setup() {
 
 void IEC62056Component::dump_config() {
   ESP_LOGCONFIG(TAG, "IEC62056:");
-  LOG_UPDATE_INTERVAL(this);
+  if (is_periodic_readout_enabled_()) {
+    ESP_LOGCONFIG(TAG, "  Update interval: %.3fs", this->update_interval_ms_ / 1000.0f);
+  } else {
+    ESP_LOGCONFIG(TAG, "  Update interval: never");
+  }
   ESP_LOGCONFIG(TAG, "  Connection timeout: %.3fs", this->connection_timeout_ms_ / 1000.0f);
   if (!force_mode_d_) {
     // These settings are not used in Mode D
@@ -584,8 +588,8 @@ bool IEC62056Component::validate_float_(const char *value) {
   const size_t max_len = 20;
   size_t count = 0;
   const char *p = value;
-  while (*p && *p != '*') {  // ignore unit at the end
-    if (!(isdigit(*p) || *p == '.' || *p == '-')) {
+  while (*p && *p != '*' && *p != '#') {  // ignore unit at the end
+    if (!(isdigit(*p) || *p == '.' || *p == '-' || *p == ',')) { // accept comma and dot as decimal separator
       return false;
     }
     p++;
@@ -620,6 +624,11 @@ bool IEC62056Component::set_sensor_value_(SENSOR_MAP::iterator &i, const char *v
     // convert to float
     if (validate_float_(value)) {
       IEC62056Sensor *sen = static_cast<IEC62056Sensor *>(sensor);
+      // convert comma (if any) to dot
+      char *p = strchr(value, ',');
+      if (p) {
+        *p = '.'; // strtof() expects dot as decimal separator
+      }
       float f = strtof(value, nullptr);
       sen->set_value(f);
       ESP_LOGD(TAG, "Set sensor '%s' for OBIS '%s'. Value: %f", sen->get_name().c_str(), sen->get_obis().c_str(), f);
@@ -784,6 +793,7 @@ void IEC62056Component::retry_or_sleep_() {
     set_next_state_(MODE_D_WAIT);
   } else if (retry_counter_ >= max_retries_) {
     ESP_LOGD(TAG, "Exceeded retry counter.");
+    this->on_timeout_callback_.call();
     wait_next_readout_();
   } else {
     retry_counter_inc_();
@@ -808,6 +818,8 @@ void IEC62056Component::trigger_readout() {
 }
 
 void IEC62056Component::wait_next_readout_() {
+  this->on_wait_next_readout_callback_.call();
+
   if (force_mode_d_) {
     set_next_state_(MODE_D_WAIT);
     return;
