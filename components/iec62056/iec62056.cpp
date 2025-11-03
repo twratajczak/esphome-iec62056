@@ -165,17 +165,18 @@ void IEC62056Component::send_battery_wakeup_sequence_() {
 char *IEC62056Component::get_id_(size_t frame_size) {
   uint8_t *p = &in_buf_[frame_size - 1 - 2 /*\r\n*/];
   size_t min_id_data_size = 7;  // min packet is '/XXXZ\r\n'
+//ESP_LOGI(TAG, "Meter frame: '%s'", in_buf_);
 
   while (p >= in_buf_ && frame_size >= min_id_data_size) {
     if ('/' == *p) {
       if ((size_t)(&in_buf_[MAX_IN_BUF_SIZE - 1] - p) < min_id_data_size) {
-        ESP_LOGVV(TAG, "Invalid ID packet.");
+        ESP_LOGI(TAG, "Invalid ID packet: '%s'", p);
 
         // garbage, ignore
         break;
       }
       in_buf_[frame_size - 2] = '\0';  // terminate string and remove \r\n
-      ESP_LOGD(TAG, "Meter identification: '%s'", p);
+      ESP_LOGI(TAG, "Meter identification: '%s'", p);
 
       return (char *) p;
     }
@@ -674,7 +675,7 @@ bool IEC62056Component::validate_obis_(const std::string &obis) {
   }
 
   for (const char &c : obis) {
-    if (!(c == ':' || c == '.' || c == '-' || c == '*' || (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z'))) {
+    if (!(c == ':' || c == '.' || c == '-' || c == '*' || c == '&' || (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z'))) {
       return false;
     }
   }
@@ -787,7 +788,7 @@ const char *IEC62056Component::state2txt_(CommState state) {
 
 void IEC62056Component::report_state_() {
   if (state_ != reported_state_) {
-    ESP_LOGV(TAG, "%s", state2txt_(state_));
+    ESP_LOGI(TAG, "%s", state2txt_(state_));
     reported_state_ = state_;
   }
 }
