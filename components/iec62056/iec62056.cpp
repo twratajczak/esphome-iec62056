@@ -83,7 +83,7 @@ void IEC62056Component::send_frame_() {
 }
 
 size_t IEC62056Component::receive_frame_() {
-  const uint32_t max_while_ms = 15;
+  const uint32_t max_while_ms = 20;
   size_t ret_val;
   auto count = this->available();
   if (count <= 0)
@@ -104,6 +104,7 @@ size_t IEC62056Component::receive_frame_() {
       }
       data_in_size_++;
     } else {
+      ESP_LOGE(TAG, "in_buf overflow");
       memmove(in_buf_, in_buf_ + 1, data_in_size_ - 1);
       p = &in_buf_[data_in_size_ - 1];
       if (!iuart_->read_one_byte(p)) {
@@ -177,6 +178,7 @@ char *IEC62056Component::get_id_(size_t frame_size) {
       }
       in_buf_[frame_size - 2] = '\0';  // terminate string and remove \r\n
       ESP_LOGI(TAG, "Meter identification: '%s'", p);
+      ESP_LOG_BUFFER_HEXDUMP(TAG, in_buf_, frame_size, ESP_LOG_ERROR);
 
       return (char *) p;
     }
@@ -410,13 +412,14 @@ void IEC62056Component::loop() {
           parse_id_(packet);
         } else {
           ESP_LOGE(TAG, "Invalid identification frame");
+          ESP_LOG_BUFFER_HEXDUMP(TAG, in_buf_, frame_size, ESP_LOG_ERROR);
           retry_or_sleep_();
           break;
         }
 
-        ESP_LOGD(TAG, "Meter reported protocol: %c", (char) mode_);
+        ESP_LOGI(TAG, "Meter reported protocol: %c", (char) mode_);
         if (mode_ != PROTOCOL_MODE_A) {
-          ESP_LOGD(TAG, "Meter reported max baud rate: %u bps ('%c')",
+          ESP_LOGI(TAG, "Meter reported max baud rate: %u bps ('%c')",
                    identification_to_baud_rate_(baud_rate_identification_), baud_rate_identification_);
         }
         set_next_state_(PREPARE_ACK);
@@ -467,13 +470,14 @@ void IEC62056Component::loop() {
       memcpy(out_buf_, set_baud, data_out_size_);
       out_buf_[2] = baud_rate_char;
       send_frame_();
+      ESP_LOG_BUFFER_HEXDUMP(TAG, out_buf_, data_out_size_, ESP_LOG_ERROR);
 
       new_baudrate = identification_to_baud_rate_(baud_rate_char);
 
       // wait for the frame to be fully transmitted before changing baud rate,
       // otherwise port get stuck and no packet can be received (ESP32)
 
-      wait_(250, SET_BAUD_RATE);
+      wait_(300, SET_BAUD_RATE);
       break;
 
     case SET_BAUD_RATE:
@@ -487,12 +491,17 @@ void IEC62056Component::loop() {
 
       // If the loop is called not very often, data can be overwritten.
       // In that case just increase UART buffer size
-      if (receive_frame_() >= 1) {
+      if (frame_size = receive_frame_()) {
         if (STX == in_buf_[0]) {
-          ESP_LOGD(TAG, "Meter started readout transmission");
+          ESP_LOGI(TAG, "Meter started readout transmission");
+          set_next_state_(READOUT);
+        } else if (STX == in_buf_[frame_size - 1]) {
+          ESP_LOGI(TAG, "Fallback Meter started readout transmission");
+          ESP_LOG_BUFFER_HEXDUMP(TAG, in_buf_, frame_size, ESP_LOG_ERROR);
           set_next_state_(READOUT);
         } else {
-          ESP_LOGD(TAG, "No STX. Got 0x%02x", in_buf_[0]);
+          ESP_LOGI(TAG, "No STX. Got 0x%02x", in_buf_[0]);
+          ESP_LOG_BUFFER_HEXDUMP(TAG, in_buf_, frame_size, ESP_LOG_ERROR);
           retry_or_sleep_();
         }
       }
@@ -504,12 +513,12 @@ void IEC62056Component::loop() {
       if ((frame_size = receive_frame_())) {
         // ETX is the first byte (the way receive_frame_() works and \r\n in data)
         if (in_buf_[0] == ETX) {
-          ESP_LOGD(TAG, "Total connection time: %u ms", millis() - retry_connection_start_timestamp_);
+          ESP_LOGI(TAG, "Total connection time: %u ms", millis() - retry_connection_start_timestamp_);
           // include ETX (but exclude STX)
           lrc_ ^= ETX;  // faster than update_lrc_(in_buf_,1);
           bool bcc_failed = false;
           if (lrc_ == readout_lrc_) {
-            ESP_LOGD(TAG, "BCC verification is OK");
+            ESP_LOGI(TAG, "BCC verification is OK");
           } else {
             ESP_LOGE(TAG, "BCC verification failed. Expected 0x%02x, got 0x%02x", lrc_, readout_lrc_);
             bcc_failed = true;
